@@ -22,7 +22,7 @@ packaging/
   patch-webkit.py            Relocates WebKitGTK helper-process lookup
   patch-config.py            Makes installed Apostrophe paths relocatable
   AppRun                     Runtime environment and launcher
-  test-appimage.sh           Clean-Fedora-44 smoke test
+  test-appimage.sh           Clean-container smoke test (Fedora 44, Ubuntu 26.04)
 src/                         Apostrophe source checkout (created by build.sh)
 tools/                       AppImage tooling (downloaded on first build)
 work/fedora44/               Build tree, AppDir and temporary files
@@ -62,7 +62,8 @@ schedule, and on demand. It:
 1. Resolves the newest Apostrophe tag from `packaging/latest-tag.sh`.
 2. Skips the build if a GitHub release for that tag already exists (scheduled
    runs only).
-3. Builds and smoke-tests the AppImage in rootless Podman on the runner.
+3. Builds the AppImage in rootless Podman and smoke-tests it in clean Fedora 44
+   and Ubuntu 26.04 containers.
 4. Publishes the AppImage and its SHA-256 as a GitHub release tagged with the
    upstream tag.
 
