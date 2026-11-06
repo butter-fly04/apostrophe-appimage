@@ -1,0 +1,212 @@
+#!/bin/sh
+# AppRun for the Apostrophe AppImage.
+#
+# Sets up the bundled Python/GObject/GTK/WebKit environment, redirects
+# WebKitGTK's helper-process lookup into the bundle, then launches Apostrophe.
+set -eu
+
+HERE="$(CDPATH= cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)"
+# Always resolve the bundle from AppRun's real location.  A stale APPDIR in the
+# caller's environment (for example from a previously mounted AppImage) must not
+# redirect us to a different bundle.
+APPDIR="$HERE"
+export APPDIR
+
+PYVER="$(ls -d "$APPDIR"/usr/lib64/python3.* 2>/dev/null | head -n1)"
+if [ -n "$PYVER" ]; then
+  PYVER="$(basename "$PYVER")"
+  PYVER="${PYVER#python}"
+else
+  PYVER="3"
+fi
+
+export PATH="$APPDIR/usr/bin:$PATH"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PYTHONHOME="$APPDIR/usr"
+export PYTHONPATH="$APPDIR/usr/lib64/python$PYVER/site-packages:$APPDIR/usr/lib/python$PYVER/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONNOUSERSITE=1
+export GI_TYPELIB_PATH="$APPDIR/usr/lib64/girepository-1.0:$APPDIR/usr/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+export GSETTINGS_SCHEMA_DIR="$APPDIR/usr/share/glib-2.0/schemas"
+export XDG_DATA_DIRS="$APPDIR/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+export GIO_MODULE_DIR="$APPDIR/usr/lib64/gio/modules"
+export GTK_PATH="$APPDIR/usr/lib64/gtk-4.0:$APPDIR/usr/lib/gtk-4.0"
+export DICPATH="$APPDIR/usr/share/hunspell:$APPDIR/usr/share/myspell"
+export PYPANDOC_PANDOC="$APPDIR/usr/bin/pandoc"
+if [ -d "$APPDIR/usr/share/fonts" ]; then
+  export TYPST_FONT_PATHS="$APPDIR/usr/share/fonts"
+fi
+
+# ---------------------------------------------------------------------------
+# WebKit helper processes
+# ---------------------------------------------------------------------------
+# libwebkitgtk was patched to resolve its helper executables through
+# /tmp/.apos-wk-exec and its injected bundle through /tmp/.apos-wk-libs.
+# Point those fixed paths at the helpers inside this AppImage mount.
+link_fixed() {
+  link="$1"
+  target="$2"
+  if [ -L "$link" ]; then
+    if [ "$(stat -c %u "$link" 2>/dev/null || echo unknown)" != "$(id -u)" ]; then
+      echo "Apostrophe: $link exists and belongs to another user" >&2
+      echo "Apostrophe: remove it or run Apostrophe as that user" >&2
+      exit 1
+    fi
+    ln -sfn "$target" "$link"
+  elif [ -e "$link" ]; then
+    echo "Apostrophe: $link exists and is not a symlink" >&2
+    exit 1
+  else
+    ln -s "$target" "$link"
+  fi
+}
+
+WK_EXEC=""
+for d in "$APPDIR/usr/libexec/webkitgtk-6.0" \
+         "$APPDIR/usr/libexec/webkit2gtk-6.0"; do
+  if [ -d "$d" ]; then
+    WK_EXEC="$d"
+    break
+  fi
+done
+
+WK_LIBS=""
+for d in "$APPDIR/usr/lib64/webkitgtk-6.0" \
+         "$APPDIR/usr/lib64/webkit2gtk-6.0" \
+         "$APPDIR/usr/lib/webkitgtk-6.0" \
+         "$APPDIR/usr/lib/webkit2gtk-6.0"; do
+  if [ -d "$d" ]; then
+    WK_LIBS="$d"
+    break
+  fi
+done
+
+[ -n "$WK_EXEC" ] && link_fixed /tmp/.apos-wk-exec "$WK_EXEC"
+[ -n "$WK_LIBS" ] && link_fixed /tmp/.apos-wk-libs "$WK_LIBS"
+if [ -n "$WK_LIBS" ] && [ -d "$WK_LIBS/injected-bundle" ]; then
+  export WEBKIT_INJECTED_BUNDLE_PATH="$WK_LIBS/injected-bundle"
+fi
+
+# WebKit hardcodes /usr/bin/bwrap and /usr/bin/xdg-dbus-proxy; the library is
+# patched to use these fixed paths instead.
+if [ -x "$APPDIR/usr/bin/bwrap" ]; then
+  link_fixed /tmp/.ap-bwrap "$APPDIR/usr/bin/bwrap"
+else
+  export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+fi
+[ -x "$APPDIR/usr/bin/xdg-dbus-proxy" ] && \
+  link_fixed /tmp/.apos-wk-dbus "$APPDIR/usr/bin/xdg-dbus-proxy"
+
+# WebKit decodes images through Glycin, whose loader configuration hardcodes
+# the system loader directory.  The configuration was rewritten in the bundle.
+if [ -d "$APPDIR/usr/libexec/glycin-loaders" ]; then
+  link_fixed /tmp/.apos-glycin "$APPDIR/usr/libexec/glycin-loaders"
+fi
+export GLYCIN_DATA_DIR="$APPDIR/usr/share"
+
+# ---------------------------------------------------------------------------
+# GdkPixbuf loader cache
+# ---------------------------------------------------------------------------
+# The cache contains absolute paths to the loaders, so it has to be generated
+# for the current AppImage mount rather than shipped from the build tree.
+# gdk-pixbuf 2.44 has built-in loaders and ships no .so modules, in which case
+# there is no cache to generate.
+CACHE_BASE="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/apostrophe-appimage"
+LOADER_DIR="$APPDIR/usr/lib64/gdk-pixbuf-2.0/2.10.0/loaders"
+if [ -d "$LOADER_DIR" ] && \
+   [ -n "$(find "$LOADER_DIR" -maxdepth 1 -name '*.so' -print -quit 2>/dev/null)" ]; then
+  mkdir -p "$CACHE_BASE"
+  CACHE_KEY="$(printf '%s' "$APPDIR" | cksum | cut -d' ' -f1)"
+  CACHE_FILE="$CACHE_BASE/loaders-$CACHE_KEY.cache"
+  if [ ! -s "$CACHE_FILE" ]; then
+    GDK_PIXBUF_MODULEDIR="$LOADER_DIR" \
+      "$APPDIR/usr/bin/gdk-pixbuf-query-loaders" > "$CACHE_FILE" 2>/dev/null || true
+  fi
+  [ -s "$CACHE_FILE" ] && export GDK_PIXBUF_MODULE_FILE="$CACHE_FILE"
+fi
+
+# Optional workarounds for unusual hosts.
+[ "${APOSTROPHE_NO_WEBKIT_SANDBOX:-0}" = "1" ] && \
+  export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+[ "${APOSTROPHE_DISABLE_DMABUF:-0}" = "1" ] && \
+  export WEBKIT_DISABLE_DMABUF_RENDERER=1
+
+# ---------------------------------------------------------------------------
+# Self-test used by packaging/test-appimage.sh
+# ---------------------------------------------------------------------------
+if [ "${1:-}" = "--apostrophe-self-test" ]; then
+  exec "$APPDIR/usr/bin/python3" - <<'PY'
+import os
+import subprocess
+
+import gi
+import chardet
+import pypandoc
+import regex
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version("GtkSource", "5")
+gi.require_version("Spelling", "1")
+gi.require_version("WebKit", "6.0")
+from gi.repository import Adw, Gtk, GtkSource, Spelling, WebKit
+
+print("apostrophe self-test: GI modules OK")
+print("apostrophe self-test: pandoc", pypandoc.get_pandoc_version())
+print("apostrophe self-test: typst", subprocess.run(
+    [os.path.join(os.environ["APPDIR"], "usr/bin/typst"), "--version"],
+    check=True, capture_output=True, text=True).stdout.strip())
+PY
+fi
+
+# Spawn WebKit's helper processes and load a page.  This verifies the
+# relocated exec/bwrap/dbus paths and the injected bundle.
+if [ "${1:-}" = "--apostrophe-webkit-self-test" ]; then
+  exec "$APPDIR/usr/bin/python3" - <<'PY'
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("WebKit", "6.0")
+from gi.repository import GLib, Gtk, WebKit
+
+status = {"ok": False}
+
+
+def on_activate(app):
+    win = Gtk.ApplicationWindow(application=app)
+    win.set_default_size(480, 320)
+    view = WebKit.WebView()
+    win.set_child(view)
+
+    def on_load(_view, event):
+        if event == WebKit.LoadEvent.FINISHED:
+            status["ok"] = True
+            print("apostrophe webkit self-test: page loaded", flush=True)
+            app.quit()
+
+    view.connect("load-changed", on_load)
+    win.present()
+    png = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4"
+           "2mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+    view.load_html(
+        "<html><body><h1>WebKit OK</h1>"
+        f"<img src='data:image/png;base64,{png}'></body></html>",
+        "file:///")
+
+    def timeout():
+        if not status["ok"]:
+            print("apostrophe webkit self-test: timed out", flush=True)
+            app.quit()
+        return False
+
+    GLib.timeout_add_seconds(20, timeout)
+
+
+app = Gtk.Application(application_id="org.gnome.gitlab.somas.Apostrophe.WebKitTest")
+app.connect("activate", on_activate)
+app.run([])
+raise SystemExit(0 if status["ok"] else 1)
+PY
+fi
+
+exec "$APPDIR/usr/bin/python3" "$APPDIR/usr/bin/apostrophe" "$@"
