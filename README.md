@@ -78,6 +78,9 @@ still use your existing rootless Podman and do not modify the host.
 # Headless import/version check inside a clean Fedora 44 container
 packaging/test-appimage.sh dist/Apostrophe-*-fedora44-x86_64.AppImage
 
+# Same check on the minimum supported target
+TEST_IMAGE=ubuntu:26.04 packaging/test-appimage.sh dist/Apostrophe-*-fedora44-x86_64.AppImage
+
 # On a graphical host: start WebKit's helper processes and load a page
 ./dist/Apostrophe-*-fedora44-x86_64.AppImage --apostrophe-webkit-self-test
 

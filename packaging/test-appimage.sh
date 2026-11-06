@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Smoke-test an AppImage in a clean Fedora 44 container.
+# Smoke-test an AppImage in a clean container.
+#
+# TEST_IMAGE selects the container image (default: Fedora 44). CI also runs
+# this against ubuntu:26.04, the minimum supported target.
 #
 # Usage: packaging/test-appimage.sh dist/Apostrophe-*.AppImage
 set -euo pipefail
