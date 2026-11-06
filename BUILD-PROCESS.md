@@ -56,7 +56,7 @@ runtime; glibc and the ELF loader are never bundled.
 ## 3. Reproducing the build
 
 ```bash
-cd Apostrophe
+cd apostrophe-appimage
 ./build.sh fedora44
 ```
 

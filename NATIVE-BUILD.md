@@ -17,7 +17,7 @@ Artifact: `dist/Apostrophe-3.5-fedora44-x86_64.AppImage` (about 191 MB).
 ## Run
 
 ```bash
-cd Apostrophe
+cd apostrophe-appimage
 ./build.sh fedora44
 packaging/test-appimage.sh dist/Apostrophe-*-fedora44-x86_64.AppImage
 ./dist/Apostrophe-*-fedora44-x86_64.AppImage
